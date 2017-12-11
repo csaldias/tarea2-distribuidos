@@ -18,15 +18,12 @@ public class Proceso extends UnicastRemoteObject implements Interfaz{
     private static Token token;
     private static Interfaz look_up;
 
-    private int seq = 1;
-    private boolean enSeccionCritica = false;
-    private boolean computacionTerminada = false;
-    private static boolean poseeToken = false;
+    private static boolean enSeccionCritica = false;
 
-    static int process_id;
-    static int num_process;
-    static int initialDelay;
-    static boolean bearer;
+    private static int process_id;
+    private static int num_process;
+    private static int initialDelay;
+    private static boolean bearer;
 
     private static List<Integer> RN = new ArrayList<Integer>();
 
@@ -36,7 +33,7 @@ public class Proceso extends UnicastRemoteObject implements Interfaz{
         RN.set(id, seq);
         LOGGER.info("(" + process_id + ") RN:" + RN);
 
-        if (!enSeccionCritica && token != null && process_id != id && (RN.get(id) > token.getTN().get(id))) {
+        if (!enSeccionCritica && token != null && process_id != id && (RN.get(id) > token.getLN().get(id))) {
             sendToken(id);
         }
     }
@@ -47,11 +44,11 @@ public class Proceso extends UnicastRemoteObject implements Interfaz{
         while (token == null) {
             waitForToken++;
             try {
-                Thread.sleep(1000);
+                Thread.sleep(100);
             } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
-            if (waitForToken % 100 == 0) {
+            if (waitForToken % 10 == 0) {
                 LOGGER.info("(" + process_id + ") Continúa esperando por token.");
             }
         }
@@ -61,16 +58,35 @@ public class Proceso extends UnicastRemoteObject implements Interfaz{
     public void takeToken(Token receivedToken) throws RemoteException {
         LOGGER.info("(" + process_id + ") Token recibido.");
         token = receivedToken;
-        poseeToken = true;
     }
 
     @Override
-    public void kill() throws RemoteException {
-        System.out.println("(" + process_id + ") Recibida orden de terminacion.");
-        System.exit(0);
+    public void kill() throws RemoteException, MalformedURLException, NotBoundException, InterruptedException {
+        LOGGER.info("(" + process_id + ") Recibida orden de terminacion.");
+        try {
+            Naming.unbind("//localhost/Proceso"+Integer.toString(process_id));
+        } catch (NotBoundException e) {
+            //Do nothing
+        }
+        UnicastRemoteObject.unexportObject(this, true);
+
+        new Thread() {
+            @Override
+            public void run() {
+                System.out.print("Shutting down...");
+                try {
+                    sleep(2000);
+                } catch (InterruptedException e) {
+                    // I don't care
+                }
+                System.out.println("done");
+                System.exit(0);
+            }
+
+        }.start();
     }
 
-    public void makeRequests() throws RemoteException, NotBoundException, MalformedURLException {
+    private void makeRequests() throws RemoteException, NotBoundException, MalformedURLException {
         //Envía el request por el token a todos los otros procesos
         RN.set(process_id, RN.get(process_id) + 1);
         LOGGER.info("(" + process_id + ") Enviando petición de token...");
@@ -84,16 +100,16 @@ public class Proceso extends UnicastRemoteObject implements Interfaz{
     }
 
     private void dispatchToken() throws MalformedURLException, NotBoundException {
-        token.getTN().set(process_id, RN.get(process_id));
+        token.getLN().set(process_id, RN.get(process_id));
         LOGGER.info("(" + process_id + ") Intentando enviar token...");
-        LOGGER.info("TN: " + token.getTN());
+        LOGGER.info("LN: " + token.getLN());
         LOGGER.info("RN: " + RN);
 
         for (int j = 0; j < num_process && token != null; j++) {
             if (j == process_id) {
                 continue;
             }
-            if (RN.get(j) > token.getTN().get(j)) {
+            if (RN.get(j) > token.getLN().get(j)) {
                 sendToken(j);
                 LOGGER.info("(" + process_id + ") Token enviado a proceso " + j);
                 break;
@@ -109,13 +125,12 @@ public class Proceso extends UnicastRemoteObject implements Interfaz{
             look_up = (Interfaz) Naming.lookup("//localhost/Proceso"+id);
             look_up.takeToken(token);
             token = null;
-            poseeToken = false;
         } catch (RemoteException e) {
             throw new RuntimeException(e);
         }
     }
 
-    public void wrapperSeccionCritica()
+    private void wrapperSeccionCritica()
             throws RemoteException, MalformedURLException, NotBoundException, InterruptedException {
         makeRequests();
         waitToken();
@@ -123,14 +138,31 @@ public class Proceso extends UnicastRemoteObject implements Interfaz{
         dispatchToken();
     }
 
-    public void seccionCritica() throws InterruptedException {
+    private void seccionCritica() throws InterruptedException {
         //Tenemos el token?
         if (token != null) {
             //Podemos entrar en la sección crítica
+            enSeccionCritica = true;
             LOGGER.info("("+ process_id + ") En seccion critica");
             //Nos quedamos aquí por un rato
-            Thread.sleep(5000);
+            Thread.sleep(10000);
             LOGGER.info("("+ process_id + ") Fuera de seccion critica");
+            enSeccionCritica = false;
+        }
+    }
+
+    private void killProcesess() throws RemoteException, MalformedURLException, NotBoundException, InterruptedException {
+        if (token != null && token.getLN().equals(RN)) {
+            //Matamos todos los otros procesos
+            for (int i=0; i < num_process; i++) {
+                if (i == process_id) {
+                    continue;
+                }
+                LOGGER.info("(" + process_id + ") Matando proceso " + i);
+                look_up = (Interfaz) Naming.lookup("//localhost/Proceso" + i);
+                look_up.kill();
+            }
+            kill();
         }
     }
 
@@ -146,9 +178,9 @@ public class Proceso extends UnicastRemoteObject implements Interfaz{
             throws IOException, NotBoundException, InterruptedException {
 
         //Obtenemos los parámetros pasados como argumentos
-        process_id=id;       //ID del proceso
-        num_process=n;      //Número de procesos en la app distribuída
-        initialDelay=delay;     //Tiempo a esperar para pedir token
+        process_id=id;                               //ID del proceso
+        num_process=n;                               //Número de procesos en la app distribuída
+        initialDelay=delay;                          //Tiempo a esperar para pedir token
         bearer=isBearer;                             //Este nodo es el portador inicial del token?
 
         FileHandler fh = new FileHandler("LogProceso"+Integer.toString(process_id)+".txt");
@@ -162,16 +194,15 @@ public class Proceso extends UnicastRemoteObject implements Interfaz{
 
         if(bearer) {
             token = Token.instantiate(num_process);
-            poseeToken = true;
             LOGGER.info("("+process_id+") Token creado.");
         }
 
         for (int i = 0; i < num_process; i++) RN.add(0);
-        LOGGER.info("("+process_id+") Lista RN: "+RN);
+        LOGGER.info("("+process_id+") RN: "+RN);
 
         //El prefix de los procesos será //ubicacion/proceso{num}
         Naming.rebind("//localhost/Proceso"+Integer.toString(process_id), new Proceso());
-        LOGGER.info("("+process_id+") Process has been binded.");
+        LOGGER.info("("+process_id+") Proceso registrado en RMI.");
 
         //Esperamos antes de poder entrar a la sección crítica
         Thread.sleep(initialDelay);
@@ -182,12 +213,7 @@ public class Proceso extends UnicastRemoteObject implements Interfaz{
 
         LOGGER.info("("+process_id+") Computación finalizada.");
 
-
-        //look_up = (Interfaz) Naming.lookup("//localhost/MyServer");
-        //String txt = JOptionPane.showInputDialog("What is your name?");
-
-        //String response = look_up.helloTo(txt);
-        //JOptionPane.showMessageDialog(null, response);
-
+        //Matamos a todos los procesos, si es que este es el último proceso que posee token
+        killProcesess();
     }
 }

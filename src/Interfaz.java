@@ -16,6 +16,6 @@ public interface Interfaz extends Remote {
 
     //Método que mata el proceso remoto. Debe usar este método para detener el algoritmo de S-K una vez que el
     //token haya pasado por todos los nodos del sistema.
-    void kill() throws RemoteException;
+    void kill() throws RemoteException, MalformedURLException, NotBoundException, InterruptedException;
 
 }

@@ -33,7 +33,7 @@ public class Token implements Serializable{
         return null;
     }
 
-    public List<Integer> getTN() {
+    public List<Integer> getLN() {
         return LN;
     }
 }
